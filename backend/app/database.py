@@ -25,7 +25,7 @@ def save_document_to_vector_db(user_id: str, document_id: str, text: str):
             f.write(text)
         print(f"✅ Document successfully saved to local text storage for user {user_id}")
     except Exception as e:
-        print(f"❌ Error saving document: {e}")
+        print(f"Error saving document: {e}")
         raise e
 
 def query_relevant_chunks(user_id: str, query: str, n_results: int = 3) -> str:
@@ -58,5 +58,5 @@ def query_relevant_chunks(user_id: str, query: str, n_results: int = 3) -> str:
         return "\n\n---\n\n".join(top_chunks)
         
     except Exception as e:
-        print(f"❌ Error querying text: {e}")
+        print(f"Error querying text: {e}")
         return ""
