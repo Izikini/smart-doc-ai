@@ -6,22 +6,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# 💡 Находим абсолютный путь к файлу .env, который лежит на уровень выше папки app/
+# 💡 Locate the absolute path to the .env file one level above the app folder
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_PATH = BASE_DIR / ".env"
 
-# Загружаем .env по жесткому абсолютному пути
+# Load the .env file from the absolute path
 load_dotenv(dotenv_path=ENV_PATH)
 
-# Добавляем строгую проверку: если ключа нет в окружении, сервер упадет с понятной ошибкой
+# Add a strict check: if the key is missing in the environment, fail with a clear error
 if not os.getenv("OPENAI_API_KEY"):
     raise RuntimeError(
-        f"\n❌ [ОШИБКА] Критическая проблема: Переменная 'OPENAI_API_KEY' не найдена!\n"
-        f"Убедись, что файл '.env' создан по пути: {ENV_PATH}\n"
-        f"И в нем записана строка: OPENAI_API_KEY=sk-proj-..."
+        f"\n[ERROR] Critical issue: environment variable 'OPENAI_API_KEY' not found!\n"
+        f"Make sure the file '.env' exists at: {ENV_PATH}\n"
+        f"And contains a line like: OPENAI_API_KEY=sk-proj-..."
     )
 
-# Импортируем наши сервисы ИИ и Базы Данных ТОЛЬКО после успешной проверки ключа
+# Import AI and database services ONLY after successful environment key validation
 from app.ai_service import extract_structured_data, ask_llm_with_context
 from app.database import save_document_to_vector_db
 

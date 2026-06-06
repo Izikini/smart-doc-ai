@@ -4,14 +4,14 @@ import re
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
-# Подключаемся к локальной Ollama
+# Connect to local Ollama
 client = OpenAI(
     base_url="http://localhost:11434/v1",
     api_key="ollama"
 )
 
-# 💡 ИСПРАВЛЕНО: Добавлены значения по умолчанию (default="Unknown" / 0.0),
-# чтобы Pydantic не падал, если Ollama забудет вернуть какое-то поле.
+# 💡 FIXED: Added default values (default="Unknown" / 0.0)
+# so Pydantic does not crash if Ollama omits a field.
 class ExtractedDocumentData(BaseModel):
     document_type: str = Field(default="Unknown", description="Type of the document, e.g., Invoice, Contract, Resume, Receipt")
     client_name: str = Field(default="Unknown", description="Name of the person or company mentioned as the primary actor/client")
@@ -21,13 +21,13 @@ class ExtractedDocumentData(BaseModel):
 
 def clean_json_string(raw_text: str) -> str:
     """
-    Очищает ответ Ollama от лишнего текста, мыслей модели и markdown-разметки ```json
+    Cleans Ollama output from extra text, model thoughts, and markdown formatting like ```json.
     """
-    # Удаляем markdown-теги ```json ... ``` или ``` ... ```
+    # Remove markdown tags like ```json ... ``` or ``` ... ```
     cleaned = re.sub(r"```json\s*", "", raw_text)
     cleaned = re.sub(r"```\s*", "", cleaned)
     
-    # Находим границы самого JSON объекта { ... } на случай, если модель написала лишний текст до/после
+    # Find the JSON object boundaries { ... } in case the model added extra text before or after.
     match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     if match:
         return match.group(0)
@@ -35,7 +35,7 @@ def clean_json_string(raw_text: str) -> str:
 
 def extract_structured_data(document_text: str) -> ExtractedDocumentData:
     """
-    Отправляет текст в локальную Ollama и безопасно преобразует результат в объект.
+    Sends text to local Ollama and safely converts the result into an object.
     """
     try:
         response = client.chat.completions.create(
@@ -68,12 +68,12 @@ def extract_structured_data(document_text: str) -> ExtractedDocumentData:
         raw_output = response.choices[0].message.content
         print(f"--- Raw Ollama Output ---\n{raw_output}\n------------------------")
         
-        # Очищаем и парсим JSON
+        # Clean and parse JSON
         clean_json = clean_json_string(raw_output)
         data_dict = json.loads(clean_json)
         
-        # 💡 ИСПРАВЛЕНО: Проверяем не только отсутствие ключа или None, 
-        # но и пустые строки "", заменяя их на "Unknown" или дефолтный текст.
+        # 💡 FIXED: Check not only for missing keys or None,
+        # but also for empty strings "", replacing them with "Unknown" or default text.
         for field in ["document_type", "client_name", "date"]:
             if field not in data_dict or data_dict[field] is None or str(data_dict[field]).strip() == "":
                 data_dict[field] = "Unknown"
@@ -97,17 +97,31 @@ def extract_structured_data(document_text: str) -> ExtractedDocumentData:
         )
 def ask_llm_with_context(user_id: str, question: str) -> str:
     """
-    Передает контекст из локальной ChromaDB в локальную Llama3.
+    Sends context from the local ChromaDB to local Llama3 with an enhanced prompt
+    so the model clearly sees the document data and answers relevantly.
     """
     from app.database import query_relevant_chunks
     
+    # Retrieve text chunks from our vector store
     context = query_relevant_chunks(user_id=user_id, query=question)
     
+    # If the database returned no context, provide a safe fallback for the model
+    if not context.strip():
+        context = "No specific text blocks found for this query in the database."
+
+    # 💡 ENHANCED PROMPT: We explicitly tell the model this is an UPLOADED DOCUMENT,
+    # and forbid it from inventing facts or giving generic answers.
     system_prompt = (
-        "You are a helpful AI assistant analyzing an uploaded document.\n"
-        "Use ONLY the following pieces of extracted context to answer the user's question.\n"
-        "If the answer is not contained within the context, state that you cannot find it in the document.\n\n"
-        f"--- CONTEXT START ---\n{context}\n--- CONTEXT END ---"
+        "You are an advanced AI Document Assistant. The user has uploaded a document, "
+        "and your task is to answer questions about it based strictly on the provided text snippets.\n\n"
+        "CRITICAL RULES:\n"
+        "1. Analyze the 'DOCUMENT CONTENT' sections below very carefully.\n"
+        "2. Provide direct, precise, and concrete answers. Extract specific dates, names, positions, and monetary values if requested.\n"
+        "3. Do not use vague or indirect phrases. If the user asks for a price, name, or date, look for it in the text and write it down explicitly.\n"
+        "4. If the information is not present in the provided document content, say exactly: 'I cannot find this information in the uploaded document.' Do not invent or assume anything.\n\n"
+        f"=== START OF UPLOADED DOCUMENT CONTENT ===\n"
+        f"{context}\n"
+        f"=== END OF UPLOADED DOCUMENT CONTENT ==="
     )
     
     try:
@@ -115,9 +129,12 @@ def ask_llm_with_context(user_id: str, question: str) -> str:
             model="llama3",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question}
+                {"role": "user", "content": (
+                    f"Based on the uploaded document text provided in your system instructions, "
+                    f"please answer this question directly: {question}"
+                )}
             ],
-            temperature=0.3
+            temperature=0.2  # Low temperature reduces model "hallucinations" and keeps answers strict
         )
         return response.choices[0].message.content
     except Exception as e:
