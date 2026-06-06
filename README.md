@@ -115,4 +115,4 @@ These tests verify endpoint behavior, extraction of the sample invoice amount, a
 
 - **Fallback validation:** Pydantic safeguards replace missing values with safe defaults so the backend does not fail on imperfect model output.
 - **Local keyword search:** Document text is indexed by keyword chunks, providing clean context to the model.
-- **Stable results:** Low temperature settings help keep responses factual and reduce hallucinations.
+- **Stable results:** Low temperature settings help keep responses factual and reduce hallucinations..
