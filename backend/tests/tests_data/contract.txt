@@ -1,0 +1,16 @@
+DOCUMENT TYPE: SOFTWARE DEVELOPMENT AGREEMENT
+CONTRACT REFERENCE: # 45-SDA
+EFFECTIVE DATE: June 05, 2026
+
+PARTIES:
+SmartDoc AI LLC (Employer) and Mr. Bogdan (Employee).
+
+SECTION 1: POSITION
+1.1. The Employee is hired for the position of Senior Fullstack Developer.
+1.2. The employment start date is fixed for June 15, 2026.
+
+SECTION 2: REMOTE WORK
+2.1. Mandatory core hours for live collaboration are fixed between 11:00 AM and 3:00 PM CET.
+
+SECTION 3: COMPENSATION
+3.1. The Employee shall receive a fixed net salary of 5500.00 EUR per month.
