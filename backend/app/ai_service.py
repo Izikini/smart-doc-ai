@@ -1,52 +1,141 @@
 import os
+import json
+import re
 from openai import OpenAI
 from pydantic import BaseModel, Field
-from dotenv import load_dotenv
 
-load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Connect to local Ollama
+client = OpenAI(
+    base_url="http://localhost:11434/v1",
+    api_key="ollama"
+)
 
+# 💡 FIXED: Added default values (default="Unknown" / 0.0)
+# so Pydantic does not crash if Ollama omits a field.
 class ExtractedDocumentData(BaseModel):
-    document_type: str = Field(description="Type of the document, e.g., Invoice, Contract, Resume, Receipt")
-    client_name: str = Field(description="Name of the person or company mentioned as the primary actor/client")
-    date: str = Field(description="Key date found in the document (YYYY-MM-DD format if possible)")
-    total_amount: float = Field(description="Total monetary value or amount mentioned, 0.0 if not applicable")
-    summary: str = Field(description="A brief 2-sentence summary of the document's content")
+    document_type: str = Field(default="Unknown", description="Type of the document, e.g., Invoice, Contract, Resume, Receipt")
+    client_name: str = Field(default="Unknown", description="Name of the person or company mentioned as the primary actor/client")
+    date: str = Field(default="Unknown", description="Key date found in the document (YYYY-MM-DD format if possible)")
+    total_amount: float = Field(default=0.0, description="Total monetary value or amount mentioned, 0.0 if not applicable")
+    summary: str = Field(default="No summary provided.", description="A brief 2-sentence summary of the document's content")
+
+def clean_json_string(raw_text: str) -> str:
+    """
+    Cleans Ollama output from extra text, model thoughts, and markdown formatting like ```json.
+    """
+    # Remove markdown tags like ```json ... ``` or ``` ... ```
+    cleaned = re.sub(r"```json\s*", "", raw_text)
+    cleaned = re.sub(r"```\s*", "", cleaned)
+    
+    # Find the JSON object boundaries { ... } in case the model added extra text before or after.
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
+        return match.group(0)
+    return cleaned.strip()
 
 def extract_structured_data(document_text: str) -> ExtractedDocumentData:
-    try:
-        response = client.beta.chat.completions.parse(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are an expert AI data extraction assistant. Analyze the unstructured document text and extract structured fields according to the provided schema."},
-                {"role": "user", "content": f"Please extract data from this document content:\n\n{document_text}"}
-            ],
-            response_format=ExtractedDocumentData,
-        )
-        return response.choices[0].message.parsed
-    except Exception as e:
-        print(f"Error during AI data extraction: {e}")
-        return ExtractedDocumentData(document_type="Unknown", client_name="Unknown", date="Unknown", total_amount=0.0, summary="Failed to parse document.")
-
-def ask_llm_with_context(user_id: str, question: str) -> str:
-    from app.database import query_relevant_chunks
-    context = query_relevant_chunks(user_id=user_id, query=question)
-    
-    system_prompt = (
-        "You are an AI assistant helping a user analyze their uploaded document.\n"
-        "Use ONLY the following pieces of extracted context to answer the user's question.\n"
-        "If you don't know the answer or if it's not in the context, say exactly that you cannot find it in the document.\n\n"
-        f"--- CONTEXT START ---\n{context}\n--- CONTEXT END ---"
-    )
+    """
+    Sends text to local Ollama and safely converts the result into an object.
+    """
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="llama3", 
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert AI data extraction assistant. Analyze the document text and extract structured fields. "
+                        "You MUST respond ONLY with a raw, valid JSON object matching the requested schema. Do not write any explanations before or after JSON.\n"
+                        "JSON Schema:\n"
+                        "{\n"
+                        '  "document_type": "string or Unknown",\n'
+                        '  "client_name": "string or Unknown",\n'
+                        '  "date": "string or Unknown",\n'
+                        '  "total_amount": float or 0.0,\n'
+                        '  "summary": "string"\n'
+                        "}"
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": f"Document text:\n{document_text}"
+                }
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1
+        )
+        
+        raw_output = response.choices[0].message.content
+        print(f"--- Raw Ollama Output ---\n{raw_output}\n------------------------")
+        
+        # Clean and parse JSON
+        clean_json = clean_json_string(raw_output)
+        data_dict = json.loads(clean_json)
+        
+        # 💡 FIXED: Check not only for missing keys or None,
+        # but also for empty strings "", replacing them with "Unknown" or default text.
+        for field in ["document_type", "client_name", "date"]:
+            if field not in data_dict or data_dict[field] is None or str(data_dict[field]).strip() == "":
+                data_dict[field] = "Unknown"
+                
+        if "summary" not in data_dict or data_dict["summary"] is None or str(data_dict["summary"]).strip() == "":
+            data_dict["summary"] = "No summary could be generated by local LLM."
+            
+        if "total_amount" not in data_dict or data_dict["total_amount"] is None:
+            data_dict["total_amount"] = 0.0
+            
+        return ExtractedDocumentData(**data_dict)
+        
+    except Exception as e:
+        print(f"Error during Ollama data extraction: {e}")
+        return ExtractedDocumentData(
+            document_type="Parsing Error",
+            client_name="Unknown",
+            date="Unknown",
+            total_amount=0.0,
+            summary=f"Failed to process JSON from local LLM: {str(e)}"
+        )
+def ask_llm_with_context(user_id: str, question: str) -> str:
+    """
+    Sends context from the local ChromaDB to local Llama3 with an enhanced prompt
+    so the model clearly sees the document data and answers relevantly.
+    """
+    from app.database import query_relevant_chunks
+    
+    # Retrieve text chunks from our vector store
+    context = query_relevant_chunks(user_id=user_id, query=question)
+    
+    # If the database returned no context, provide a safe fallback for the model
+    if not context.strip():
+        context = "No specific text blocks found for this query in the database."
+
+    # 💡 ENHANCED PROMPT: We explicitly tell the model this is an UPLOADED DOCUMENT,
+    # and forbid it from inventing facts or giving generic answers.
+    system_prompt = (
+        "You are an advanced AI Document Assistant. The user has uploaded a document, "
+        "and your task is to answer questions about it based strictly on the provided text snippets.\n\n"
+        "CRITICAL RULES:\n"
+        "1. Analyze the 'DOCUMENT CONTENT' sections below very carefully.\n"
+        "2. Provide direct, precise, and concrete answers. Extract specific dates, names, positions, and monetary values if requested.\n"
+        "3. Do not use vague or indirect phrases. If the user asks for a price, name, or date, look for it in the text and write it down explicitly.\n"
+        "4. If the information is not present in the provided document content, say exactly: 'I cannot find this information in the uploaded document.' Do not invent or assume anything.\n\n"
+        f"=== START OF UPLOADED DOCUMENT CONTENT ===\n"
+        f"{context}\n"
+        f"=== END OF UPLOADED DOCUMENT CONTENT ==="
+    )
+    
+    try:
+        response = client.chat.completions.create(
+            model="llama3",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question}
+                {"role": "user", "content": (
+                    f"Based on the uploaded document text provided in your system instructions, "
+                    f"please answer this question directly: {question}"
+                )}
             ],
-            temperature=0.2
+            temperature=0.2  # Low temperature reduces model "hallucinations" and keeps answers strict
         )
         return response.choices[0].message.content
     except Exception as e:
-        return f"Error creating chat response: {e}"
+        return f"Error creating local chat response: {e}"

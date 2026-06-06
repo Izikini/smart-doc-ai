@@ -1,8 +1,27 @@
+import os
 import uuid
+from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from dotenv import load_dotenv
 
+# 💡 Locate the absolute path to the .env file one level above the app folder
+BASE_DIR = Path(__file__).resolve().parent.parent
+ENV_PATH = BASE_DIR / ".env"
+
+# Load the .env file from the absolute path
+load_dotenv(dotenv_path=ENV_PATH)
+
+# Add a strict check: if the key is missing in the environment, fail with a clear error
+if not os.getenv("OPENAI_API_KEY"):
+    raise RuntimeError(
+        f"\n[ERROR] Critical issue: environment variable 'OPENAI_API_KEY' not found!\n"
+        f"Make sure the file '.env' exists at: {ENV_PATH}\n"
+        f"And contains a line like: OPENAI_API_KEY=sk-proj-..."
+    )
+
+# Import AI and database services ONLY after successful environment key validation
 from app.ai_service import extract_structured_data, ask_llm_with_context
 from app.database import save_document_to_vector_db
 
